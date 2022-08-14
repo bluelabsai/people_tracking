@@ -1,6 +1,5 @@
 import io
 from fastapi import FastAPI, UploadFile
-from pydantic import BaseModel
 import uvicorn
 
 from otracking.models import PeopleAnalytics
