@@ -30,12 +30,5 @@ export PYTHONPATH="${PYTHONPATH}:${PWD}"
 python3 app.py
 </pre> 
 
-**In your browser: http://0.0.0.0:8000/docs**
-
-**Post in /process-video**
-****
-
-click on Try it out
-
-
+**In your browser: http://0.0.0.0:8000/docs*
 

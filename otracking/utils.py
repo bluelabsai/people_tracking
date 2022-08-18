@@ -35,10 +35,10 @@ def draw(img, boxes, classes, scores, labels, colors):
         x_start, y_start, w_end, h_end = box
         # draw a bounding box rectangle and label on the image
         color = [int(c) for c in colors[cl]]
-        cv2.rectangle(img, (x_start, y_start), (w_end, h_end), color, 2)
+        cv2.rectangle(img, (x_start, y_start), (w_end, h_end), color, 6)
         text = "{}: {:.4f}".format(labels[cl], score)
         cv2.putText(img, text, (x_start, y_start - 5), cv2.FONT_HERSHEY_SIMPLEX,
-            0.5, color, 2)
+            1.5, color, 3)
 
     return img
 
