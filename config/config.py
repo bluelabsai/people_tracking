@@ -13,5 +13,12 @@ MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
 URL_MODELS = {
     "yolov3": "1ku-iE-0V4Rcd9rrF28SCbZnAnQoa1jgp",
-    "mobilenet_v2": "1a7U05ttb693hx7CR82Sn__P-t_NIUX2B"
+    "mobilenet_v2": "1a7U05ttb693hx7CR82Sn__P-t_NIUX2B",
+    "yv5_onnx": "1wapuTcZG3zX4POVC9jqgdU89cjly6tia",
+    "yv5_pt": "18z4_Rsd8GL1DWxP82ZToqcCLv4uvwJqr"
+}
+
+YV5_FORMATS = {
+    "yv5_onnx": "best.onnx",
+    "yv5_pt": "best.pt"
 }

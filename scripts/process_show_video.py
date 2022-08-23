@@ -3,11 +3,11 @@ import cv2
 import numpy as np
 
 from config.config import DATA_DIR, STORE_DIR
-from otracking.yolo import YOLO
+from otracking.yolo import YOLO, Yolov5
 from otracking.utils import draw, read_yolo_labels
 
 model_dir = Path(STORE_DIR, "models", "yolov3")
-path_video = DATA_DIR / "mall_5ffp.mp4"
+path_video = DATA_DIR / "4_seccion_tienda.mp4"
 path_out = DATA_DIR / "mall_out_video.mp4"
 
 labels = read_yolo_labels(model_dir)
@@ -25,7 +25,8 @@ W = int(vs.get(cv2.CAP_PROP_FRAME_WIDTH))
 H = int(vs.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
 # Inicializamos variables principales
-yolo = YOLO("yolov3")
+#yolo = YOLO("yolov3")
+yolo = Yolov5("yv5_onnx", 0.3)
 
 totalFrame = 0
 fourcc = cv2.VideoWriter_fourcc(*'MP4V')
@@ -44,10 +45,14 @@ while True:
     # Nos saltamos los frames especificados.
     if totalFrame % skip_fps == 0:
         # Predecimos los objectos y clases de la imagen
-        boxes, classes, scores = yolo.predict(frame)
+        # boxes, classes, scores = yolo.predict(frame)
+        _, results = yolo.predict(frame)
 
-    frame = draw(frame, boxes, classes, scores, labels, colors)
-    
+
+    # frame = draw(frame, boxes, classes, scores, labels, colors)
+    frame = results.render()
+    frame = np.squeeze(frame, axis=0)
+
     totalFrame += 1
 
     cv2.imshow("people detector", frame)

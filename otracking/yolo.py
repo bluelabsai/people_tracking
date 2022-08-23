@@ -1,13 +1,53 @@
-"""YOLO v3 output
+"""
+    Yolo models (v3, v5)
 """
 from pathlib import Path
 import cv2
 import numpy as np
+import torch
 
 from otracking.utils import relativebox2absolutebox, download_models
-from config.config import MODELS_DIR
+from config.config import MODELS_DIR, YV5_FORMATS
 
 ALLOW_DETECTOR_MODELS = ["yolov3"]
+ALLOW_DETECTOR_MODELS_YV5 = ["yv5_onnx", "yv5_pt"]
+
+
+class Yolov5:
+    def __init__(self, model_name, confidence: float=0.6):
+
+        self.model_name = model_name
+        self.model_file = YV5_FORMATS[self.model_name]
+        self.model_dir = Path(MODELS_DIR, self.model_name, self.model_file)
+
+        self.confidence = confidence
+
+        self.load_model()
+
+    def load_model(self):
+        if not self.model_dir.exists():
+            print("model not exist in project directory, trying download")
+            download_models(self.model_name)
+
+        self.model = torch.hub.load(
+            'ultralytics/yolov5', 'custom', path=str(self.model_dir), #force_reload=True
+        )
+        self.model.conf = self.confidence
+
+    def _process_output(self):
+        pass
+
+    def _predict(self, img: np.ndarray):
+        detections = self.model(img)
+        detections_crop = detections.crop(save=False)
+
+        return detections_crop, detections
+
+    def predict(self, img: np.ndarray):
+        detections_crop, results = self._predict(img) 
+
+        return detections_crop, results
+
 
 class YOLO:
     def __init__(

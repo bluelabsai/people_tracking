@@ -14,7 +14,7 @@ async def read_root():
 @app.post('/process-video', status_code=200)
 async def parse_request(camera_location:str, period_time:str, file: UploadFile):
     contents = await file.read()
-    model = PeopleAnalytics(camera_location, period_time)
+    model = PeopleAnalytics(camera_location, period_time, detector_name="yv5_onnx")
     response = model.process_video(contents, False)
 
     return response
