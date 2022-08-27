@@ -56,3 +56,16 @@ def download_models(model_name: str):
      output=str(destination),
      use_cookies=False
 )
+
+def rel2abs_points(weigth: int, height:int, relative_points: List[List]) -> np.ndarray:
+    absolute_points = []
+    for relative_point in relative_points:
+        obsolute_point = list(np.multiply([weigth, height], relative_point).astype(np.int32))
+        absolute_points.append(obsolute_point)
+    return np.array(absolute_points)
+
+def poligonal_mask(img: np.ndarray, weigth:int, height:int, points: np.ndarray):
+    mask = np.zeros((height, weigth), np.uint8)
+    cv2.drawContours(mask, [points], -1, (255, 255, 255), -1, cv2.LINE_AA)
+    masked_img = cv2.bitwise_and(img, img, mask=mask)
+    return masked_img

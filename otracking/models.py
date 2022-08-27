@@ -10,13 +10,14 @@ import dlib
 from otracking.yolo import YOLO, Yolov5
 from config.config import MODELS_DIR, STORE_DIR, DATA_DIR
 from otracking.trackingeng import centroidtracker, trackableobject
-from otracking.utils import relativebox2absolutebox
+from otracking.utils import rel2abs_points, poligonal_mask
 
 ALLOWED_DETECTORS = ["yolov3", "ssd_mobilenet", "yv5_onnx", "yv5_pt"]
 
 class PeopleAnalytics:
 
-    def __init__(self, camera_location:str, period_time:str, detector_name:str="yolov3") -> None:
+    def __init__(
+        self, camera_location:str, period_time:str, detector_name:str="yolov3", confidence: float=0.6) -> None:
         
         if detector_name not in ALLOWED_DETECTORS:
             raise ValueError(f"detector name not implement try someone: {ALLOWED_DETECTORS}")
@@ -26,13 +27,14 @@ class PeopleAnalytics:
         self.PATH_VIDEO = "/tmp/video_in.mp4"
         self.PATH_OUTPUT = "/tmp/output.mp4"
 
+        self.confidence = confidence
         if detector_name == "yolov3":
             raise ValueError("yolov3 is not implemented in this branch")
             # self.model_dir = Path(STORE_DIR, "models", "yolov3")
             # self.model = YOLO("yolov3")
 
         elif detector_name in [ "yv5_onnx", "yv5_pt"]:
-            self.model = Yolov5(detector_name, 0.3)
+            self.model = Yolov5(detector_name, self.confidence)
 
         elif detector_name == "ssd_mobilenet":
             raise ValueError(f"detector name not implement try someone: {ALLOWED_DETECTORS}")
@@ -40,11 +42,11 @@ class PeopleAnalytics:
 
 
     def process_video(
-        self, video_bytes, draw_video:bool=False, output = DATA_DIR / "output_video.mp4", portion_mask=None):
-        
-        self.portion_mask = portion_mask
+        self, video_bytes, region_mask=None, draw_video:bool=False):
+
+        self.region_mask = region_mask
         if draw_video:
-            self.output = output
+            self.output = DATA_DIR / "output_video.mp4"
             return self._process_video_show(video_bytes)
         else:
             return self._process_video(video_bytes)
@@ -62,6 +64,10 @@ class PeopleAnalytics:
         W = int(vs.get(cv2.CAP_PROP_FRAME_WIDTH))
         H = int(vs.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
+        if self.region_mask:
+            self.region_mask = [self.region_mask]
+            abs_points = rel2abs_points(W, H, self.region_mask)
+
         ct = centroidtracker.CentroidTracker(maxDisappeared= 40, maxDistance = 50)
 
         # Inicializamos variables principales
@@ -73,7 +79,7 @@ class PeopleAnalytics:
         totalDown = 0
         totalUp = 0
 
-        DIRECTION_PEOPLE = True
+        DIRECTION_PEOPLE = False
 
         # Creamos un umbral para sabre si el carro paso de izquierda a derecha o viceversa
         # En este caso lo deje fijo pero se pudiese configurar según la ubicación de la cámara.
@@ -91,6 +97,11 @@ class PeopleAnalytics:
             if frame is None:
                 break
             
+            if self.region_mask:
+                frame_input = poligonal_mask(frame, W, H, abs_points)
+            else:
+                frame_input = frame.copy()
+
             status = "Waiting"
             rects = []
 
@@ -100,14 +111,7 @@ class PeopleAnalytics:
             if totalFrame % skip_fps == 0:
                 status = "Detecting"
                 trackers = []
-                # Tomamos la imagen la convertimos a array luego a tensor
-                image_np = np.array(frame)
-
-                # pimage = process_image_yolo(image_np)
-
-                # Predecimos los objectos y clases de la imagen
-                #boxes, classes, scores = self.model.predict(image_np)
-                detections_crop, _ = self.model.predict(image_np)
+                detections_crop, _ = self.model.predict(frame_input)
 
                 # transorm boxes
 
@@ -121,7 +125,7 @@ class PeopleAnalytics:
                     # Con la función de dlib empezamos a hacer seguimiento de los boudiung box obtenidos
                     tracker = dlib.correlation_tracker()
                     rect = dlib.rectangle(startX, startY, endX, endY)
-                    tracker.start_track(frame, rect)
+                    tracker.start_track(frame_input, rect)
 
                     trackers.append(tracker)
             else:
@@ -130,7 +134,7 @@ class PeopleAnalytics:
                 for tracker in trackers:
                     status = "Tracking"
                     # Actualizamos y buscamos los nuevos bounding box
-                    tracker.update(frame)
+                    tracker.update(frame_input)
                     pos = tracker.get_position()
 
                     startX = int(pos.left())
@@ -214,6 +218,10 @@ class PeopleAnalytics:
         W = int(vs.get(cv2.CAP_PROP_FRAME_WIDTH))
         H = int(vs.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
+        if self.region_mask:
+            self.region_mask = [self.region_mask]
+            abs_points = rel2abs_points(W, H, self.region_mask)
+
         ct = centroidtracker.CentroidTracker(maxDisappeared= 40, maxDistance = 50)
 
         # Inicializamos variables principales
@@ -237,13 +245,6 @@ class PeopleAnalytics:
         # Definimos el formato del archivo resultante y las rutas.
         fourcc = cv2.VideoWriter_fourcc(*'MP4V')
         writer = cv2.VideoWriter(str(self.output), fourcc, 30.0, (W, H), True)
-
-        #mask
-        mask = np.zeros((H, W), dtype="uint8")
-        if self.portion_mask:
-            xy_1 = (int(self.portion_mask[0]*W), int(self.portion_mask[1]*H))
-            xy_2 = (int(self.portion_mask[2]*W), int(self.portion_mask[3]*H))
-            cv2.rectangle(mask, xy_1, xy_2, 255, -1)
         
 
         # Bucle que recorre todo el video
@@ -255,8 +256,10 @@ class PeopleAnalytics:
             if frame is None:
                 break
 
-            if self.portion_mask:
-                frame_masked = cv2.bitwise_and(frame, frame, mask=mask)
+            if self.region_mask:
+                frame_input = poligonal_mask(frame, W, H, abs_points)
+            else:
+                frame_input = frame.copy()
 
             status = "Waiting"
             rects = []
@@ -267,14 +270,7 @@ class PeopleAnalytics:
             if totalFrame % skip_fps == 0:
                 status = "Detecting"
                 trackers = []
-                # Tomamos la imagen la convertimos a array luego a tensor
-                image_np = np.array(frame_masked)
-
-                # pimage = process_image_yolo(image_np)
-
-                # Predecimos los objectos y clases de la imagen
-                #boxes, classes, scores = self.model.predict(image_np)
-                detections_crop, _ = self.model.predict(image_np)
+                detections_crop, _ = self.model.predict(frame_input)
 
                 # transorm boxes
 
@@ -288,7 +284,7 @@ class PeopleAnalytics:
                     # Con la función de dlib empezamos a hacer seguimiento de los boudiung box obtenidos
                     tracker = dlib.correlation_tracker()
                     rect = dlib.rectangle(startX, startY, endX, endY)
-                    tracker.start_track(frame, rect)
+                    tracker.start_track(frame_input, rect)
 
                     trackers.append(tracker)
             else:
@@ -297,7 +293,7 @@ class PeopleAnalytics:
                 for tracker in trackers:
                     status = "Tracking"
                     # Actualizamos y buscamos los nuevos bounding box
-                    tracker.update(frame_masked)
+                    tracker.update(frame_input)
                     pos = tracker.get_position()
 
                     startX = int(pos.left())
@@ -350,8 +346,9 @@ class PeopleAnalytics:
                 cv2.putText(frame, text, (centroid[0]-10, centroid[1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 2)
                 cv2.circle(frame, (centroid[0], centroid[1]), 4, (0,255,0), -1)
 
-            if objects_to_save:
-                raw_data[str(date_time)] = objects_to_save
+            if totalFrame % skip_fps == 0:
+                if objects_to_save:
+                    raw_data[str(date_time)] = objects_to_save
             # Totalizamos los resultados finales
             info = [
                     ("Sur", totalUp),
@@ -378,7 +375,7 @@ class PeopleAnalytics:
         writer.release()
         vs.release()
         
-        video = open(self.PATH_OUTPUT, "rb")
+        video = open(self.output, "rb")
         video_read = video.read()
         image_64_encode = base64.b64encode(video_read)
         image_64_encode_return = image_64_encode.decode() 

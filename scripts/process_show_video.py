@@ -7,7 +7,7 @@ from otracking.yolo import YOLO, Yolov5
 from otracking.utils import draw, read_yolo_labels
 
 model_dir = Path(STORE_DIR, "models", "yolov3")
-path_video = DATA_DIR / "4_seccion_tienda.mp4"
+path_video = DATA_DIR / "1_pasillo_mall.mp4"
 path_out = DATA_DIR / "mall_out_video.mp4"
 
 labels = read_yolo_labels(model_dir)
@@ -26,7 +26,7 @@ H = int(vs.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
 # Inicializamos variables principales
 #yolo = YOLO("yolov3")
-yolo = Yolov5("yv5_onnx", 0.3)
+yolo = Yolov5("yv5_pt", 0.5)
 
 totalFrame = 0
 fourcc = cv2.VideoWriter_fourcc(*'MP4V')

@@ -30,7 +30,7 @@ class Yolov5:
             download_models(self.model_name)
 
         self.model = torch.hub.load(
-            'ultralytics/yolov5', 'custom', path=str(self.model_dir), #force_reload=True
+            'ultralytics/yolov5', 'custom', path=str(self.model_dir), force_reload=True
         )
         self.model.conf = self.confidence
 
