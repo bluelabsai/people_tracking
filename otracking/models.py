@@ -6,18 +6,19 @@ import cv2
 import numpy as np
 from imutils.video import FPS
 import dlib
+import torch
 
 from otracking.yolo import YOLO, Yolov5
 from config.config import MODELS_DIR, STORE_DIR, DATA_DIR
-from otracking.trackingeng import centroidtracker, trackableobject
-from otracking.utils import rel2abs_points, poligonal_mask
+from otracking.tracking import TrackableObject, Tracker
+from otracking.utils import rel2abs_points, poligonal_mask, xyxy_to_xywh
 
-ALLOWED_DETECTORS = ["yolov3", "ssd_mobilenet", "yv5_onnx", "yv5_pt"]
+ALLOWED_DETECTORS = ["yolov3", "yv5_onnx", "yv5_pt"]
 
 class PeopleAnalytics:
 
     def __init__(
-        self, camera_location:str, period_time:str, detector_name:str="yolov3", confidence: float=0.6) -> None:
+        self, camera_location:str, period_time:str, detector_name:str="yv5_onnx", confidence: float=0.6, tracker_weights="osnet_x0_25_msmt17.pt") -> None:
         
         if detector_name not in ALLOWED_DETECTORS:
             raise ValueError(f"detector name not implement try someone: {ALLOWED_DETECTORS}")
@@ -58,20 +59,28 @@ class PeopleAnalytics:
 
         skip_fps = 30
 
-        vs = cv2.VideoCapture(self.PATH_VIDEO)
+        vs = cv2.VideoCapture(str(self.PATH_VIDEO))
+
+        trackableObjects = {}
+        writer = None
 
         # Definimos ancho y alto
         W = int(vs.get(cv2.CAP_PROP_FRAME_WIDTH))
         H = int(vs.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-        if self.region_mask:
-            self.region_mask = [self.region_mask]
-            abs_points = rel2abs_points(W, H, self.region_mask)
+        DIRECTION_PEOPLE = False
 
-        ct = centroidtracker.CentroidTracker(maxDisappeared= 40, maxDistance = 50)
+        fps = FPS().start()
 
-        # Inicializamos variables principales
-        trackers = []
+        # Creamos un umbral para sabre si el carro paso de izquierda a derecha o viceversa
+        POINT = [0, int((H/2)-H*0.1), W, int(H*0.1)]
+
+
+        # Definimos el formato del archivo resultante y las rutas.
+        fourcc = cv2.VideoWriter_fourcc(*'MP4V')
+        writer = cv2.VideoWriter(str(self.PATH_OUTPUT), fourcc, 30.0, (W, H), True)
+
+        tracker = Tracker()
         trackableObjects = {}
         raw_data = {}
 
@@ -79,80 +88,37 @@ class PeopleAnalytics:
         totalDown = 0
         totalUp = 0
 
-        DIRECTION_PEOPLE = False
-
-        # Creamos un umbral para sabre si el carro paso de izquierda a derecha o viceversa
-        # En este caso lo deje fijo pero se pudiese configurar según la ubicación de la cámara.
-        POINT = [0, int((H/2)-H*0.1), W, int(H*0.1)]
-
-        # Los FPS nos van a permitir ver el rendimiento de nuestro modelo y si funciona en tiempo real.
-        fps = FPS().start()
-
-        # Bucle que recorre todo el video
         while True:
-            # Leemos el primer frame
+
             ret, frame = vs.read()
 
-            # Si ya no hay más frame, significa que el video termino y por tanto se sale del bucle
             if frame is None:
                 break
-            
-            if self.region_mask:
-                frame_input = poligonal_mask(frame, W, H, abs_points)
-            else:
-                frame_input = frame.copy()
 
             status = "Waiting"
             rects = []
 
             date_time = datetime.datetime.now()
-
             # Nos saltamos los frames especificados.
-            if totalFrame % skip_fps == 0:
-                status = "Detecting"
-                trackers = []
-                detections_crop, _ = self.model.predict(frame_input)
+            crop_result, results = self.model.predict(frame)
 
-                # transorm boxes
+            ext_results = results.pandas().xyxy[0]
+            xyxy = torch.tensor(ext_results[['xmin', 'ymin', 'xmax', 'ymax']].values)
+            confidences = torch.tensor(ext_results[['confidence']].values)
+            clss = torch.tensor(ext_results[['class']].values)
 
-                # Recorremos las detecciones
-                # for x in range(len(classes)):
-                for detection in detections_crop:
-                    idx = int(detection["cls"])
-                    # Tomamos los bounding box 
-                    (startX, startY, endX, endY) = np.array(detection["box"]).astype("int")
+            xywh= xyxy_to_xywh(xyxy)
 
-                    # Con la función de dlib empezamos a hacer seguimiento de los boudiung box obtenidos
-                    tracker = dlib.correlation_tracker()
-                    rect = dlib.rectangle(startX, startY, endX, endY)
-                    tracker.start_track(frame_input, rect)
+            # get id and centroids dict
+            objects = tracker.update(xywh, confidences, clss, frame)
 
-                    trackers.append(tracker)
-            else:
-                # En caso de que no hagamos detección haremos seguimiento
-                # Recorremos los objetos que se les está realizando seguimiento
-                for tracker in trackers:
-                    status = "Tracking"
-                    # Actualizamos y buscamos los nuevos bounding box
-                    tracker.update(frame_input)
-                    pos = tracker.get_position()
-
-                    startX = int(pos.left())
-                    startY = int(pos.top())
-                    endX = int(pos.right())
-                    endY = int(pos.bottom())
-
-                    rects.append((startX, startY, endX, endY))
-
-            objects = ct.update(rects)
             objects_to_save = {}
-
             # Recorremos cada una de las detecciones
             for (objectID, centroid) in objects.items():
                 # Revisamos si el objeto ya se ha contado
                 to = trackableObjects.get(objectID, None)
                 if to is None:
-                    to = trackableobject.TrackableObject(objectID, centroid)
+                    to = TrackableObject(objectID, centroid)
 
                 else:
                     # Si no se ha contado, analizamos la dirección del objeto
@@ -177,11 +143,35 @@ class PeopleAnalytics:
                                     to.counted = True
 
                 trackableObjects[objectID] = to
-                objects_to_save[objectID] = centroid.tolist()
+                objects_to_save[objectID] = centroid
+
+                # Dibujamos el centroide y el ID de la detección encontrada
+                text = "ID {}".format(objectID)
+                cv2.putText(frame, text, (centroid[0]-5, centroid[1]-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 2)
+                cv2.circle(frame, (centroid[0], centroid[1]), 4, (0,255,0), -1)
 
             if objects_to_save:
                 raw_data[str(date_time)] = objects_to_save
 
+            info = [
+                    ("Sur", totalUp),
+                    ("Norte", totalDown),
+                    ("Estado", status),
+            ]
+
+            for (i, (k,v)) in enumerate(info):
+                text = "{}: {}".format(k,v)
+                cv2.putText(frame, text, (10, H - ((i*20) + 20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 2)
+
+            #cv2.imshow("people detector", frame)
+
+            writer.write(frame)
+
+            if cv2.waitKey(10) == ord("q"):
+                break
+
+            # Almacenamos el framme en nuestro video resultante.
+            writer.write(frame)
             totalFrame += 1
             fps.update()
 
@@ -192,7 +182,11 @@ class PeopleAnalytics:
         print("Tiempo aproximado por frame {}".format(fps.fps()))
 
         # Cerramos el stream de consumir el video.
-        vs.release()
+        vs.release()     
+        video = open(self.output, "rb")
+        video_read = video.read()
+        image_64_encode = base64.b64encode(video_read)
+        image_64_encode_return = image_64_encode.decode() 
 
         output_data = {
         "camera_location": self.camera_location,
@@ -207,25 +201,30 @@ class PeopleAnalytics:
         video_result = open(self.PATH_VIDEO, "wb")
         video_result.write(video_bytes)
 
-        skip_fps = 15
-        threshold = 0.3
+        skip_fps = 30
 
-        vs = cv2.VideoCapture(self.PATH_VIDEO)
+        vs = cv2.VideoCapture(str(self.PATH_VIDEO))
 
+        trackableObjects = {}
         writer = None
 
         # Definimos ancho y alto
         W = int(vs.get(cv2.CAP_PROP_FRAME_WIDTH))
         H = int(vs.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-        if self.region_mask:
-            self.region_mask = [self.region_mask]
-            abs_points = rel2abs_points(W, H, self.region_mask)
+        DIRECTION_PEOPLE = False
 
-        ct = centroidtracker.CentroidTracker(maxDisappeared= 40, maxDistance = 50)
+        fps = FPS().start()
 
-        # Inicializamos variables principales
-        trackers = []
+        # Creamos un umbral para sabre si el carro paso de izquierda a derecha o viceversa
+        POINT = [0, int((H/2)-H*0.1), W, int(H*0.1)]
+
+
+        # Definimos el formato del archivo resultante y las rutas.
+        fourcc = cv2.VideoWriter_fourcc(*'MP4V')
+        writer = cv2.VideoWriter(str(self.PATH_OUTPUT), fourcc, 30.0, (W, H), True)
+
+        tracker = Tracker()
         trackableObjects = {}
         raw_data = {}
 
@@ -233,88 +232,37 @@ class PeopleAnalytics:
         totalDown = 0
         totalUp = 0
 
-        DIRECTION_PEOPLE = True
-
-        # Creamos un umbral para sabre si el carro paso de izquierda a derecha o viceversa
-        # En este caso lo deje fijo pero se pudiese configurar según la ubicación de la cámara.
-        POINT = [0, int((H*0.7)-H*0.1), W, int(H*0.1)]
-
-        # Los FPS nos van a permitir ver el rendimiento de nuestro modelo y si funciona en tiempo real.
-        fps = FPS().start()
-
-        # Definimos el formato del archivo resultante y las rutas.
-        fourcc = cv2.VideoWriter_fourcc(*'MP4V')
-        writer = cv2.VideoWriter(str(self.output), fourcc, 30.0, (W, H), True)
-        
-
-        # Bucle que recorre todo el video
         while True:
-            # Leemos el primer frame
+
             ret, frame = vs.read()
 
-            # Si ya no hay más frame, significa que el video termino y por tanto se sale del bucle
             if frame is None:
                 break
-
-            if self.region_mask:
-                frame_input = poligonal_mask(frame, W, H, abs_points)
-            else:
-                frame_input = frame.copy()
 
             status = "Waiting"
             rects = []
 
             date_time = datetime.datetime.now()
-
             # Nos saltamos los frames especificados.
-            if totalFrame % skip_fps == 0:
-                status = "Detecting"
-                trackers = []
-                detections_crop, _ = self.model.predict(frame_input)
+            crop_result, results = self.model.predict(frame)
 
-                # transorm boxes
+            ext_results = results.pandas().xyxy[0]
+            xyxy = torch.tensor(ext_results[['xmin', 'ymin', 'xmax', 'ymax']].values)
+            confidences = torch.tensor(ext_results[['confidence']].values)
+            clss = torch.tensor(ext_results[['class']].values)
 
-                # Recorremos las detecciones
-                # for x in range(len(classes)):
-                for detection in detections_crop:
-                    idx = int(detection["cls"])
-                    # Tomamos los bounding box 
-                    (startX, startY, endX, endY) = np.array(detection["box"]).astype("int")
+            xywh= xyxy_to_xywh(xyxy)
 
-                    # Con la función de dlib empezamos a hacer seguimiento de los boudiung box obtenidos
-                    tracker = dlib.correlation_tracker()
-                    rect = dlib.rectangle(startX, startY, endX, endY)
-                    tracker.start_track(frame_input, rect)
+            # get id and centroids dict
+            objects = tracker.update(xywh, confidences, clss, frame)
 
-                    trackers.append(tracker)
-            else:
-                # En caso de que no hagamos detección haremos seguimiento
-                # Recorremos los objetos que se les está realizando seguimiento
-                for tracker in trackers:
-                    status = "Tracking"
-                    # Actualizamos y buscamos los nuevos bounding box
-                    tracker.update(frame_input)
-                    pos = tracker.get_position()
-
-                    startX = int(pos.left())
-                    startY = int(pos.top())
-                    endX = int(pos.right())
-                    endY = int(pos.bottom())
-
-                    rects.append((startX, startY, endX, endY))
-
-            # Dibujamos el umbral de conteo
-            #cv2.rectangle(frame, (POINT[0], POINT[1]), (POINT[0]+ POINT[2], POINT[1] + POINT[3]), (255, 0, 255), 2)
-
-            objects = ct.update(rects)
             objects_to_save = {}
-
             # Recorremos cada una de las detecciones
             for (objectID, centroid) in objects.items():
                 # Revisamos si el objeto ya se ha contado
                 to = trackableObjects.get(objectID, None)
                 if to is None:
-                    to = trackableobject.TrackableObject(objectID, centroid)
+                    to = TrackableObject(objectID, centroid)
 
                 else:
                     # Si no se ha contado, analizamos la dirección del objeto
@@ -339,17 +287,16 @@ class PeopleAnalytics:
                                     to.counted = True
 
                 trackableObjects[objectID] = to
-                objects_to_save[objectID] = centroid.tolist()
+                objects_to_save[objectID] = centroid
 
                 # Dibujamos el centroide y el ID de la detección encontrada
                 text = "ID {}".format(objectID)
-                cv2.putText(frame, text, (centroid[0]-10, centroid[1]-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 2)
+                cv2.putText(frame, text, (centroid[0]-5, centroid[1]-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 2)
                 cv2.circle(frame, (centroid[0], centroid[1]), 4, (0,255,0), -1)
 
-            if totalFrame % skip_fps == 0:
-                if objects_to_save:
-                    raw_data[str(date_time)] = objects_to_save
-            # Totalizamos los resultados finales
+            if objects_to_save:
+                raw_data[str(date_time)] = objects_to_save
+
             info = [
                     ("Sur", totalUp),
                     ("Norte", totalDown),
@@ -357,8 +304,15 @@ class PeopleAnalytics:
             ]
 
             for (i, (k,v)) in enumerate(info):
-              text = "{}: {}".format(k,v)
-              cv2.putText(frame, text, (10, H - ((i*20) + 20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 2)
+                text = "{}: {}".format(k,v)
+                cv2.putText(frame, text, (10, H - ((i*20) + 20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 2)
+
+            #cv2.imshow("people detector", frame)
+
+            writer.write(frame)
+
+            if cv2.waitKey(10) == ord("q"):
+                break
 
             # Almacenamos el framme en nuestro video resultante.
             writer.write(frame)
@@ -371,10 +325,8 @@ class PeopleAnalytics:
         print("Tiempo completo {}".format(fps.elapsed()))
         print("Tiempo aproximado por frame {}".format(fps.fps()))
 
-        # Cerramos el stream the almacenar video y de consumir el video.
-        writer.release()
-        vs.release()
-        
+        # Cerramos el stream de consumir el video.
+        vs.release()     
         video = open(self.output, "rb")
         video_read = video.read()
         image_64_encode = base64.b64encode(video_read)

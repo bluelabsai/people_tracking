@@ -7,6 +7,7 @@ DATA_DIR = Path(BASE_DIR, "data")
 STORE_DIR = Path(BASE_DIR, "store")
 MODELS_DIR = Path(STORE_DIR, "models")
 
+
 # Create dir
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
